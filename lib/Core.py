@@ -1,47 +1,130 @@
 # lib/Core.py
 import pygame
+from pathlib import Path
+from .utils import cargar_imagen, escalar_a_tamaño
 
 # ------------------------- JUGADOR -------------------------
-class Jugador:
-    """
-    Animación de 2 cuadros SIEMPRE activa (corre en el lugar).
-    Las flechas ←/→ mueven la X, pero la animación no depende de eso.
-    """
-    def __init__(self, frames, x, suelo_y, velocidad=320.0, velocidad_anim=0.14, x_min=30, x_max=930):
-        assert len(frames) >= 2, "Se esperan al menos 2 frames para animar"
-        self.frames = frames
-        self.x = x
-        self.suelo_y = suelo_y
-        self.velocidad = velocidad
-        self.velocidad_anim = velocidad_anim
-        self.x_min = x_min
-        self.x_max = x_max
 
-        self.indice_anim = 0
-        self.tiempo_anim = 0.0
-        self.rect = self.frames[0].get_rect(midbottom=(self.x, self.suelo_y))
- #--- Comportamientos--
+class Jugador:
+    def __init__(self, frames, x_positions, carril_inicial_idx, suelo_y,
+                 velocidad_anim=0.14, invulnerabilidad=1.0):
+        if len(frames) < 2: raise ValueError("Se esperan >=2 frames")
+        if len(x_positions) != 3: raise ValueError("Se esperan 3 carriles")
+        if not (0 <= carril_inicial_idx < 3): raise IndexError("Carril inicial inválido")
+        self._frames = frames
+        self._x_positions = x_positions
+        self._carril = carril_inicial_idx
+        self._suelo_y = suelo_y
+
+        self._indice_anim = 0
+        self._tiempo_anim = 0.0
+        self._velocidad_anim = float(velocidad_anim)
+
+        self._vidas_max = 3
+        self._vidas = 3
+        self._invulnerable = False
+        self._timer_invul = 0.0
+        self._invulnerabilidad = float(invulnerabilidad)
+
+        x = self._x_positions[self._carril]
+        self._rect = self._frames[0].get_rect(midbottom=(x, self._suelo_y))
+
+        self._cooldown_cambio = 0.15
+        self._timer_cambio = 0.0
+
+    def get_vidas(self):
+        return self._vidas
+
+    def set_vidas(self, valor):
+        v = int(valor)
+        if v < 0: v = 0
+        if v > self._vidas_max: v = self._vidas_max
+        self._vidas = v
+
+    def get_vidas_max(self):
+        return self._vidas_max
+
+    def get_carril(self):
+        return self._carril#0,1,2
+
+    def set_carril(self, idx):
+        i = int(idx)
+        if 0 <= i <= 2:
+            self._carril = i
+
+    def get_rect(self):
+        return self._rect
+
+    def get_invulnerable(self):
+        return self._invulnerable
+
+    def get_velocidad_anim(self):
+        return self._velocidad_anim
+
+    def set_velocidad_anim(self, v):
+        self._velocidad_anim = float(v)
+
+    def perder_vida(self):
+        if (not self._invulnerable) and self._vidas > 0:
+            self._vidas -= 1
+            self._invulnerable = True
+            self._timer_invul = self._invulnerabilidad
+
+    def mover_izquierda(self):
+        self._mover_carril(-1)
+
+    def mover_derecha(self):
+        self._mover_carril(+1)
+
     def manejar_entrada(self, teclas, dt):
-        dx = 0.0
-        if teclas[pygame.K_LEFT]:
-            dx -= self.velocidad * dt
-        if teclas[pygame.K_RIGHT]:
-            dx += self.velocidad * dt
-        if dx:
-            self.x = max(self.x_min, min(self.x_max, self.x + dx))
+        self._timer_cambio = max(0.0, self._timer_cambio - dt)
+        movio = False
+        if self._timer_cambio == 0.0:
+            if teclas[pygame.K_LEFT] or teclas[pygame.K_a]:
+                movio = self._mover_carril(-1)
+            elif teclas[pygame.K_RIGHT] or teclas[pygame.K_d]:
+                movio = self._mover_carril(+1)
+        if movio:
+            self._timer_cambio = self._cooldown_cambio
+
+    def _mover_carril(self, delta):
+        nuevo = self._carril + delta
+        if 0 <= nuevo <= 2:
+            self._carril = nuevo
+            return True
+        return False
+
+    def vivo(self):
+        return self._vidas > 0
 
     def actualizar(self, dt):
-        self.tiempo_anim += dt
-        if self.tiempo_anim >= self.velocidad_anim:
-            self.tiempo_anim = 0.0
-            self.indice_anim ^= 1
-        self.rect = self.frames[self.indice_anim].get_rect(midbottom=(self.x, self.suelo_y))
+        self._tiempo_anim += dt
+        if self._tiempo_anim >= self._velocidad_anim:
+            self._tiempo_anim = 0.0
+            self._indice_anim ^= 1
+        # invulnerabilidad
+        if self._invulnerable:
+            self._timer_invul -= dt
+            if self._timer_invul <= 0.0:
+                self._invulnerable = False
+        #posicionar rect
+        x = self._x_positions[self._carril]
+        self._rect = self._frames[self._indice_anim].get_rect(midbottom=(x, self._suelo_y))
 
     def dibujar(self, pantalla):
-        pantalla.blit(self.frames[self.indice_anim], self.rect)
+        visible = True
+        if self._invulnerable:
+            ticks = int(pygame.time.get_ticks() * 0.01)
+            visible = (ticks % 2) == 0
+        if visible:
+            pantalla.blit(self._frames[self._indice_anim], self._rect)
+
+    def colisiona_con(self, rect):
+        return self._rect.colliderect(rect)
 
 
-# -------PREGUNTA------------------
+
+# -------PREGUNTA--------------
 class Pregunta:
     def __init__(self, enunciado, valor_izq, valor_der, carril_correcto):
         # carril_correcto: "izq" | "der"
@@ -129,10 +212,6 @@ NIVELES_PREDEF = [
 ]
 
 class Progresion:
-    """
-    Elige el nivel según puntaje y expone parámetros:
-    - nivel, velocidad_juego, intervalo_preguntas, intervalo_obstaculos, rango_operandos
-    """
     def __init__(self, niveles=None):
         self.niveles = niveles if niveles is not None else NIVELES_PREDEF
         self.idx_actual = 0
@@ -153,8 +232,150 @@ class Progresion:
             i += 1
         while i > 0 and puntaje < self.niveles[i].puntaje_minimo:
             i -= 1
-
         if i != self.idx_actual:
             self.idx_actual = i
             self.aplicar(self.niveles[i])
             
+# ------------------------- HELPERS DE DIBUJO (HUD) -------------------------
+def dibujar_vidas(pantalla, vidas, x=20, y=20, w=24, h=24, gap=8):
+    import pygame
+    for i in range(vidas):
+        r = pygame.Rect(x + i*(w+gap), y, w, h)
+        pygame.draw.rect(pantalla, (220, 60, 60), r, border_radius=6)
+        pygame.draw.rect(pantalla, (120, 20, 20), r, width=2, border_radius=6)
+
+def dibujar_carriles(pantalla, x_positions, y_top, y_bottom, color=(60, 60, 70)):
+    import pygame
+    for x in x_positions:
+        pygame.draw.line(pantalla, color, (x, y_top), (x, y_bottom), width=2)
+
+#-----------------------fondo------------------------------------
+class FondoScroll:
+    """
+    Scroll vertical infinito SIEMPRE hacia abajo, sin escalar la imagen.
+    La imagen del fondo DEBE tener exactamente el tamaño de pantalla.
+    """
+    def __init__(self, imagen_surface, tamaño_pantalla, velocidad_px_s=160):
+        self._w, self._h = tamaño_pantalla
+
+        self._img = imagen_surface
+        self._vel = float(velocidad_px_s)
+        self._y1, self._y2 = 0.0, float(self._h)
+    def get_velocidad(self):
+        return self._vel
+
+    def set_velocidad(self, px_por_seg):
+        self._vel = float(px_por_seg)
+
+    # -------- LÓGICA --------
+    def actualizar(self, dt):
+        dy = self._vel * dt
+        self._y1 += dy
+        self._y2 += dy
+        #loop infinito hacia abajo
+        if self._y1 >= self._h:
+            self._y1 = self._y2 - self._h
+        if self._y2 >= self._h:
+            self._y2 = self._y1 - self._h
+
+    def dibujar(self, pantalla):
+        pantalla.blit(self._img, (0, int(self._y1)))
+        pantalla.blit(self._img, (0, int(self._y2)))
+
+#----------------------JUEGO---------------------------
+class Juego:
+    def __init__(self, carpeta_base: Path, ancho=1536, alto=1024, fps=60):
+        #ventana fija igual al fondo
+        self.ANCHO, self.ALTO, self.FPS = ancho, alto, fps
+
+        #tamaño fijo del personaje en pantalla
+        self.TAM_PERSONAJE = (128, 128)  # (ancho, alto)
+
+        # Carriles
+        self.X_IZQ  = int(self.ANCHO * 0.20)
+        self.X_CEN  = int(self.ANCHO * 0.50)
+        self.X_DER  = int(self.ANCHO * 0.80)
+        self.CARRILES = [self.X_IZQ, self.X_CEN, self.X_DER]
+        self.SUELO_Y = int(self.ALTO * 0.82)
+        self.BASE = carpeta_base
+        
+        self.CARPETA_SPRITES = self.BASE / "Sprite"
+        self.CARPETA_PERSONAJE = self.CARPETA_SPRITES / "Personaje"
+
+        pygame.init()
+        self.pantalla = pygame.display.set_mode((self.ANCHO, self.ALTO))
+        pygame.display.set_caption("Juego Educativo - Carriles")
+        self.reloj = pygame.time.Clock()
+
+        #carga y entidades
+        self._cargar_recursos()
+        self._crear_entidades()
+
+        self.corriendo = True
+
+    # -------recursos-------
+    def _cargar_recursos(self):
+        #fondo
+        fondo_img = cargar_imagen(self.CARPETA_SPRITES / "fondo.png", con_alpha=False)
+        self.fondo = FondoScroll(fondo_img, (self.ANCHO, self.ALTO), velocidad_px_s=180)
+
+        #personaje
+        frame_izq = cargar_imagen(self.CARPETA_PERSONAJE / "izquierda.png")
+        frame_der = cargar_imagen(self.CARPETA_PERSONAJE / "derecha.png")
+        frame_izq = escalar_a_tamaño(frame_izq, *self.TAM_PERSONAJE)
+        frame_der = escalar_a_tamaño(frame_der, *self.TAM_PERSONAJE)
+        self.frames_personaje = [frame_izq, frame_der]
+
+    # -------crear objetos de juego--------------
+    def _crear_entidades(self):
+        self.jugador = Jugador(
+            frames=self.frames_personaje,
+            x_positions=self.CARRILES,
+            carril_inicial_idx=1,
+            suelo_y=self.SUELO_Y,
+            velocidad_anim=0.12,
+            invulnerabilidad=0.9,
+        )
+
+        #Baldosa de prueba para verificar colisión/vidas
+        self.baldosa_prueba = pygame.Rect(0, 0, 140, 46)
+        self.baldosa_prueba.centerx = self.X_IZQ
+        self.baldosa_prueba.top = self.SUELO_Y - 300#60 px por encima del suelo
+
+    # -------loop principal----------
+    def run(self):
+        while self.corriendo:
+            dt = self.reloj.tick(self.FPS) / 1000.0
+            self._eventos()
+            self._actualizar(dt)
+            self._dibujar()
+        pygame.quit()
+
+    # -----partes del loop---------------
+    def _eventos(self):
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                self.corriendo = False
+
+    def _actualizar(self, dt: float):
+        teclas = pygame.key.get_pressed()
+        self.jugador.manejar_entrada(teclas, dt)
+        self.jugador.actualizar(dt)
+
+        #si pisa la baldosa de prueba, pierde una vida y la retiro
+        if self.jugador.colisiona_con(self.baldosa_prueba):
+            self.jugador.perder_vida()
+            self.baldosa_prueba.top = -1000
+
+        self.fondo.actualizar(dt)
+
+    def _dibujar(self):
+        self.fondo.dibujar(self.pantalla)
+
+        pygame.draw.rect(self.pantalla, (80, 120, 220), self.baldosa_prueba, border_radius=10)
+        pygame.draw.rect(self.pantalla, (30, 60, 140),  self.baldosa_prueba, width=2, border_radius=10)
+
+        self.jugador.dibujar(self.pantalla)
+        dibujar_vidas(self.pantalla, self.jugador.get_vidas())
+
+        pygame.display.flip()
