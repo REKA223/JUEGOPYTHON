@@ -285,6 +285,14 @@ class FondoScroll:
 #----------------------JUEGO---------------------------
 class Juego:
     def __init__(self, carpeta_base: Path, ancho=1536, alto=1024, fps=60):
+        if not pygame.get_init():
+            pygame.init()
+        if not pygame.font.get_init():
+            pygame.font.init()
+        self.game_over = False
+        self.game_over_timer = 0.0
+        # (opcional) fuente grande para el cartel
+        self.fuente_game_over = pygame.font.SysFont(None, 96)
         #ventana fija igual al fondo
         self.ANCHO, self.ALTO, self.FPS = ancho, alto, fps
 
@@ -411,54 +419,48 @@ class Juego:
                 self.corriendo = False
 
     def _actualizar(self, dt: float):
-        # Entrada del jugador
+        # --- GAME OVER: congelar lógica, esperar 2s y salir ---
+        if self.game_over:
+            self.game_over_timer += dt
+            if self.game_over_timer >= 2.0:
+                self.corriendo = False
+            return
+
+        # Entrada + jugador
         teclas = pygame.key.get_pressed()
         self.jugador.manejar_entrada(teclas, dt)
         self.jugador.actualizar(dt)
 
-        # -------------------------
-        # Timers para spawners
-        # -------------------------
+        # Timers (preguntas / obstáculos)
         self.tiempo_preguntas += dt
         self.tiempo_obstaculos += dt
 
-        # Generar una nueva pregunta (solo si no hay baldosas en pantalla)
         if self.tiempo_preguntas >= 2.2 and not self.baldosas:
             self.tiempo_preguntas = 0.0
             self._spawn_pregunta()
 
-        # Generar un nuevo obstáculo
         if self.tiempo_obstaculos >= 1.8:
             self.tiempo_obstaculos = 0.0
             self._spawn_obstaculo()
 
-        # -------------------------
         # Movimiento descendente
-        # -------------------------
-        vel = getattr(self, "velocidad_juego", 240.0)  # usa 240px/s si no tenés Progresion
+        vel = getattr(self, "velocidad_juego", 240.0)
 
-        # Baldosas de respuesta
         for b in self.baldosas:
             b.rect.move_ip(0, vel * dt)
-        # limpiar si salen de pantalla
         self.baldosas = [b for b in self.baldosas if b.rect.top < self.ALTO + 20]
 
-        # Obstáculos
         for r in self.obstaculos:
             r.move_ip(0, vel * dt)
-        # limpiar si salen de pantalla
         self.obstaculos = [r for r in self.obstaculos if r.top < self.ALTO + 50]
 
-        # -------------------------
         # Colisiones
-        # -------------------------
         jr = self.jugador.get_rect()
 
-        # a) Respuestas (prioridad sobre obstáculo)
+        # a) Respuestas (prioridad)
         if self.baldosas:
             tocadas = [b for b in self.baldosas if jr.colliderect(b.rect)]
             if tocadas:
-                # Izq/Der por cercanía al centro del carril
                 carril = (
                     "izq"
                     if abs(tocadas[0].rect.centerx - self.X_IZQ)
@@ -469,7 +471,6 @@ class Juego:
                     self.puntaje += 100
                 else:
                     self.jugador.perder_vida()
-                # limpiar opciones y enunciado
                 self.baldosas.clear()
                 self.enunciado_actual = ""
 
@@ -479,8 +480,13 @@ class Juego:
                 self.jugador.perder_vida()
                 self.obstaculos.remove(r)
 
-        # Fondo en movimiento
+        # Fondo
         self.fondo.actualizar(dt)
+
+        # --- Disparar GAME OVER cuando no quedan vidas ---
+        if self.jugador.get_vidas() <= 0 and not self.game_over:
+            self.game_over = True
+            self.game_over_timer = 0.0
 
     def _dibujar(self):
         # Fondo
@@ -510,5 +516,22 @@ class Juego:
             enun = self.fuente.render(self.enunciado_actual, True, (255, 255, 0))
             enun_rect = enun.get_rect(center=(self.ANCHO // 2, int(self.ALTO * 0.10)))
             self.pantalla.blit(enun, enun_rect)
+        
+        if self.game_over:
+            # Capa oscura semitransparente
+            overlay = pygame.Surface((self.ANCHO, self.ALTO))
+            overlay.set_alpha(160)
+            overlay.fill((0, 0, 0))
+            self.pantalla.blit(overlay, (0, 0))
+
+            # Textos
+            fuente_big = getattr(self, "fuente_game_over", self.fuente)
+            txt_go = fuente_big.render("GAME OVER", True, (255, 80, 80))
+            rect_go = txt_go.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 - 40))
+            self.pantalla.blit(txt_go, rect_go)
+
+            txt_score = self.fuente.render(f"Puntaje final: {self.puntaje}", True, (255, 255, 255))
+            rect_sc = txt_score.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 + 20))
+            self.pantalla.blit(txt_score, rect_sc)
 
         pygame.display.flip()
