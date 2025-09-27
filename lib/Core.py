@@ -311,6 +311,18 @@ class Juego:
         self._cargar_recursos()
         self._crear_entidades()
 
+        # --- Math Runner state ---
+        self.puntaje = 0
+        self.fuente = pygame.font.SysFont(None, 48)
+
+        self.gestor = GestorPreguntas()   # genera preguntas
+
+        self.baldosas = []      # opciones de respuesta (izq/der)
+        self.obstaculos = []    # obstáculos que caen
+        self.tiempo_preguntas = 0.0
+        self.tiempo_obstaculos = 0.0
+        self.enunciado_actual = ""
+
         self.corriendo = True
 
     # -------recursos-------
@@ -336,11 +348,52 @@ class Juego:
             velocidad_anim=0.12,
             invulnerabilidad=0.9,
         )
+    
+    def _spawn_pregunta(self):
+        preg = self.gestor.siguiente_pregunta(
+            operaciones=["suma", "resta", "multiplicacion"],
+            rango_operandos=(1, 9)  # o self.progresion.rango_operandos
+        )
 
-        #Baldosa de prueba para verificar colisión/vidas
-        self.baldosa_prueba = pygame.Rect(0, 0, 140, 46)
-        self.baldosa_prueba.centerx = self.X_IZQ
-        self.baldosa_prueba.top = self.SUELO_Y - 300#60 px por encima del suelo
+        # guardar enunciado (en tu modelo es "enunciado", no "texto")
+        self.enunciado_actual = getattr(preg, "enunciado", getattr(preg, "texto", ""))
+
+        # estilos base
+        color_fondo = (40, 120, 200)
+        color_borde = (20, 60, 120)
+        ancho, alto, y_top = 260, 70, -100
+
+        self.baldosas = [
+            BaldosaRespuesta(
+                valor=preg.valor_izq,
+                x_centro=self.X_IZQ,
+                y_top=y_top,
+                ancho=ancho,
+                alto=alto,
+                color_fondo=color_fondo,
+                color_borde=color_borde,
+                fuente=self.fuente,
+            ),
+            BaldosaRespuesta(
+                valor=preg.valor_der,
+                x_centro=self.X_DER,
+                y_top=y_top,
+                ancho=ancho,
+                alto=alto,
+                color_fondo=color_fondo,
+                color_borde=color_borde,
+                fuente=self.fuente,
+            ),
+        ]
+        
+    def _spawn_obstaculo(self):
+        import random
+        r = pygame.Rect(0, 0, 120, 50)
+        r.centerx = random.choice([self.X_IZQ, self.X_CEN, self.X_DER])
+        r.top = -r.height - 40
+        self.obstaculos.append(r)
+   
+    
 
     # -------loop principal----------
     def run(self):
@@ -358,24 +411,104 @@ class Juego:
                 self.corriendo = False
 
     def _actualizar(self, dt: float):
+        # Entrada del jugador
         teclas = pygame.key.get_pressed()
         self.jugador.manejar_entrada(teclas, dt)
         self.jugador.actualizar(dt)
 
-        #si pisa la baldosa de prueba, pierde una vida y la retiro
-        if self.jugador.colisiona_con(self.baldosa_prueba):
-            self.jugador.perder_vida()
-            self.baldosa_prueba.top = -1000
+        # -------------------------
+        # Timers para spawners
+        # -------------------------
+        self.tiempo_preguntas += dt
+        self.tiempo_obstaculos += dt
 
+        # Generar una nueva pregunta (solo si no hay baldosas en pantalla)
+        if self.tiempo_preguntas >= 2.2 and not self.baldosas:
+            self.tiempo_preguntas = 0.0
+            self._spawn_pregunta()
+
+        # Generar un nuevo obstáculo
+        if self.tiempo_obstaculos >= 1.8:
+            self.tiempo_obstaculos = 0.0
+            self._spawn_obstaculo()
+
+        # -------------------------
+        # Movimiento descendente
+        # -------------------------
+        vel = getattr(self, "velocidad_juego", 240.0)  # usa 240px/s si no tenés Progresion
+
+        # Baldosas de respuesta
+        for b in self.baldosas:
+            b.rect.move_ip(0, vel * dt)
+        # limpiar si salen de pantalla
+        self.baldosas = [b for b in self.baldosas if b.rect.top < self.ALTO + 20]
+
+        # Obstáculos
+        for r in self.obstaculos:
+            r.move_ip(0, vel * dt)
+        # limpiar si salen de pantalla
+        self.obstaculos = [r for r in self.obstaculos if r.top < self.ALTO + 50]
+
+        # -------------------------
+        # Colisiones
+        # -------------------------
+        jr = self.jugador.get_rect()
+
+        # a) Respuestas (prioridad sobre obstáculo)
+        if self.baldosas:
+            tocadas = [b for b in self.baldosas if jr.colliderect(b.rect)]
+            if tocadas:
+                # Izq/Der por cercanía al centro del carril
+                carril = (
+                    "izq"
+                    if abs(tocadas[0].rect.centerx - self.X_IZQ)
+                    <= abs(tocadas[0].rect.centerx - self.X_DER)
+                    else "der"
+                )
+                if self.gestor.evaluar_eleccion(carril):
+                    self.puntaje += 100
+                else:
+                    self.jugador.perder_vida()
+                # limpiar opciones y enunciado
+                self.baldosas.clear()
+                self.enunciado_actual = ""
+
+        # b) Obstáculos
+        for r in list(self.obstaculos):
+            if jr.colliderect(r):
+                self.jugador.perder_vida()
+                self.obstaculos.remove(r)
+
+        # Fondo en movimiento
         self.fondo.actualizar(dt)
 
     def _dibujar(self):
+        # Fondo
         self.fondo.dibujar(self.pantalla)
 
-        pygame.draw.rect(self.pantalla, (80, 120, 220), self.baldosa_prueba, border_radius=10)
-        pygame.draw.rect(self.pantalla, (30, 60, 140),  self.baldosa_prueba, width=2, border_radius=10)
+        # Baldosas de respuesta
+        for b in self.baldosas:
+            b.dibujar(self.pantalla)
 
+        # Obstáculos
+        for r in self.obstaculos:
+            pygame.draw.rect(self.pantalla, (200, 80, 80), r, border_radius=8)
+            pygame.draw.rect(self.pantalla, (120, 30, 30), r, width=2, border_radius=8)
+
+        # Jugador + vidas
         self.jugador.dibujar(self.pantalla)
         dibujar_vidas(self.pantalla, self.jugador.get_vidas())
+
+        # HUD: puntaje + enunciado
+        if not hasattr(self, "fuente"):
+            self.fuente = pygame.font.SysFont(None, 48)
+
+        puntos = self.fuente.render(f"Puntos: {self.puntaje}", True, (255, 255, 255))
+        self.pantalla.blit(puntos, (20, 20))
+
+        if getattr(self, "enunciado_actual", ""):
+            enun = self.fuente.render(self.enunciado_actual, True, (255, 255, 0))
+            enun_rect = enun.get_rect(center=(self.ANCHO // 2, int(self.ALTO * 0.10)))
+            self.pantalla.blit(enun, enun_rect)
 
         pygame.display.flip()
