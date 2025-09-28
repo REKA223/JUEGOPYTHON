@@ -207,8 +207,8 @@ class ParametrosNivel:
 #tabla de niveles
 NIVELES_PREDEF = [
     ParametrosNivel(nivel=1, puntaje_minimo=0,   velocidad_juego=5.0, intervalo_preguntas=1.8, intervalo_obstaculos=1.6, rango_operandos=(1, 10)),
-    ParametrosNivel(nivel=2, puntaje_minimo=300, velocidad_juego=6.0, intervalo_preguntas=1.4, intervalo_obstaculos=1.4, rango_operandos=(1, 15)),
-    ParametrosNivel(nivel=3, puntaje_minimo=700, velocidad_juego=7.0, intervalo_preguntas=1.1, intervalo_obstaculos=1.2, rango_operandos=(1, 20)),
+    ParametrosNivel(nivel=2, puntaje_minimo=1000, velocidad_juego=6.0, intervalo_preguntas=1.4, intervalo_obstaculos=1.4, rango_operandos=(1, 15)),
+    ParametrosNivel(nivel=3, puntaje_minimo=2000, velocidad_juego=7.0, intervalo_preguntas=1.1, intervalo_obstaculos=1.2, rango_operandos=(1, 20)),
 ]
 
 class Progresion:
@@ -237,7 +237,7 @@ class Progresion:
             self.aplicar(self.niveles[i])
             
 # ------------------------- HELPERS DE DIBUJO (HUD) -------------------------
-def dibujar_vidas(pantalla, vidas, x=20, y=20, w=24, h=24, gap=8):
+def dibujar_vidas(pantalla, vidas, x=300, y=25, w=24, h=24, gap=8):
     import pygame
     for i in range(vidas):
         r = pygame.Rect(x + i*(w+gap), y, w, h)
@@ -284,11 +284,12 @@ class FondoScroll:
 
 #----------------------JUEGO---------------------------
 class Juego:
-    def __init__(self, carpeta_base: Path, ancho=1536, alto=1024, fps=60):
+    def __init__(self, carpeta_base: Path, ancho=1500, alto=1000, fps=60):
         if not pygame.get_init():
             pygame.init()
         if not pygame.font.get_init():
             pygame.font.init()
+        self.pausado = False
         self.game_over = False
         self.game_over_timer = 0.0
         # (opcional) fuente grande para el cartel
@@ -314,7 +315,7 @@ class Juego:
         self.pantalla = pygame.display.set_mode((self.ANCHO, self.ALTO))
         pygame.display.set_caption("Juego Educativo - Carriles")
         self.reloj = pygame.time.Clock()
-
+        self.progresion = Progresion()
         #carga y entidades
         self._cargar_recursos()
         self._crear_entidades()
@@ -393,7 +394,7 @@ class Juego:
                 fuente=self.fuente,
             ),
         ]
-        
+    # -------crear obstáculo--------------
     def _spawn_obstaculo(self):
         import random
         r = pygame.Rect(0, 0, 120, 50)
@@ -405,27 +406,42 @@ class Juego:
 
     # -------loop principal----------
     def run(self):
+        resultado = "salir"
         while self.corriendo:
             dt = self.reloj.tick(self.FPS) / 1000.0
             self._eventos()
-            self._actualizar(dt)
+            if not self.pausado and not self.game_over:
+                self._actualizar(dt)
             self._dibujar()
+            if getattr(self, "reiniciar", False):
+                resultado = "reiniciar"
+                break
         pygame.quit()
+        return resultado
 
     # -----partes del loop---------------
     def _eventos(self):
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 self.corriendo = False
+            if e.type == pygame.KEYDOWN and e.key == pygame.K_p:
+                self.pausado = not self.pausado
+            if self.pausado and e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                mx, my = e.pos
+                if self.rect_reanudar.collidepoint(mx, my):
+                    self.pausado = False
+                elif self.rect_salir.collidepoint(mx, my):
+                    self.corriendo = False
+            if self.game_over and e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                mx, my = e.pos
+                if self.rect_reintentar.collidepoint(mx, my):
+                    self.reiniciar = True
+                elif self.rect_salir.collidepoint(mx, my):
+                    self.corriendo = False       
 
     def _actualizar(self, dt: float):
-        # --- GAME OVER: congelar lógica, esperar 2s y salir ---
-        if self.game_over:
-            self.game_over_timer += dt
-            if self.game_over_timer >= 2.0:
-                self.corriendo = False
-            return
-
+        # velocidad del juego según nivel
+        self.progresion.actualizar_por_puntaje(self.puntaje)
         # Entrada + jugador
         teclas = pygame.key.get_pressed()
         self.jugador.manejar_entrada(teclas, dt)
@@ -444,8 +460,7 @@ class Juego:
             self._spawn_obstaculo()
 
         # Movimiento descendente
-        vel = getattr(self, "velocidad_juego", 240.0)
-
+        vel = self.progresion.velocidad_juego * 60
         for b in self.baldosas:
             b.rect.move_ip(0, vel * dt)
         self.baldosas = [b for b in self.baldosas if b.rect.top < self.ALTO + 20]
@@ -524,14 +539,61 @@ class Juego:
             overlay.fill((0, 0, 0))
             self.pantalla.blit(overlay, (0, 0))
 
+            
+
+        # Pausa
+        if self.pausado:
+            overlay = pygame.Surface((self.ANCHO, self.ALTO))
+            overlay.set_alpha(180)
+            overlay.fill((30, 30, 30))
+            self.pantalla.blit(overlay, (0, 0))
+
+            fuente = pygame.font.SysFont(None, 72)
+            txt_pausa = fuente.render("PAUSA", True, (255, 255, 80))
+            rect_pausa = txt_pausa.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 - 120))
+            self.pantalla.blit(txt_pausa, rect_pausa)
+
+            fuente_btn = pygame.font.SysFont(None, 48)
+            txt_reanudar = fuente_btn.render("Reanudar", True, (255, 255, 255))
+            txt_salir = fuente_btn.render("Salir", True, (255, 255, 255))
+
+            self.rect_reanudar = txt_reanudar.get_rect(center=(self.ANCHO // 2, self.ALTO // 2))
+            self.rect_salir = txt_salir.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 + 80))
+
+            pygame.draw.rect(self.pantalla, (80, 180, 80), self.rect_reanudar.inflate(40, 20), border_radius=12)
+            pygame.draw.rect(self.pantalla, (180, 80, 80), self.rect_salir.inflate(40, 20), border_radius=12)
+
+            self.pantalla.blit(txt_reanudar, self.rect_reanudar)
+            self.pantalla.blit(txt_salir, self.rect_salir)
+
+        # Game Over
+        if self.game_over:
+            overlay = pygame.Surface((self.ANCHO, self.ALTO))
+            overlay.set_alpha(180)
+            overlay.fill((30, 0, 0))
+            self.pantalla.blit(overlay, (0, 0))
+
+            fuente = pygame.font.SysFont(None, 72)
+            txt_over = fuente.render("GAME OVER", True, (255, 80, 80))
+            rect_over = txt_over.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 - 120))
+            self.pantalla.blit(txt_over, rect_over)
+
+            fuente_btn = pygame.font.SysFont(None, 48)
+            txt_reintentar = fuente_btn.render("Reintentar", True, (255, 255, 255))
+            txt_salir = fuente_btn.render("Salir", True, (255, 255, 255))
+
+            self.rect_reintentar = txt_reintentar.get_rect(center=(self.ANCHO // 2, self.ALTO // 2))
+            self.rect_salir = txt_salir.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 + 80))
+
+            pygame.draw.rect(self.pantalla, (80, 180, 80), self.rect_reintentar.inflate(40, 20), border_radius=12)
+            pygame.draw.rect(self.pantalla, (180, 80, 80), self.rect_salir.inflate(40, 20), border_radius=12)
+
+            self.pantalla.blit(txt_reintentar, self.rect_reintentar)
+            self.pantalla.blit(txt_salir, self.rect_salir)
+
             # Textos
-            fuente_big = getattr(self, "fuente_game_over", self.fuente)
-            txt_go = fuente_big.render("GAME OVER", True, (255, 80, 80))
-            rect_go = txt_go.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 - 40))
-            self.pantalla.blit(txt_go, rect_go)
-
             txt_score = self.fuente.render(f"Puntaje final: {self.puntaje}", True, (255, 255, 255))
-            rect_sc = txt_score.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 + 20))
+            rect_sc = txt_score.get_rect(center=(self.ANCHO // 2, self.ALTO // 2 - 200))
             self.pantalla.blit(txt_score, rect_sc)
-
         pygame.display.flip()
+
